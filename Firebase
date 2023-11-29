@@ -1,0 +1,188 @@
+#include <WiFi.h>
+#include <WiFiClient.h>
+#include <Firebase_ESP_Client.h>
+#include <DHT.h>
+#include <stdlib.h>
+#define DHTPIN 23
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
+#define API_KEY "xxxxxxxxxxxxxxxxxxxx"
+#define DATABASE_URL "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+#define USER_EMAIL "xxxxxxxxxx"
+#define USER_PASSWORD "xxxxxxxxxxxxxxx"
+
+const char* ssid = "vdh2002";
+const char* password = "12345678";
+FirebaseData fbdo;
+FirebaseJson json;
+unsigned long sendDataPrevMillis = 0;
+const int cbdoam = 33;
+const int maybom = 26;
+const int dieuhoa = 25;
+const int densuoi=18;
+int doam;
+int temp;
+FirebaseAuth auth;
+FirebaseConfig config;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(18, OUTPUT);
+  pinMode(LED_BUILTIN, OUTPUT);
+  delay(1000);
+  pinMode(maybom, OUTPUT);
+  WiFi.mode(WIFI_STA);  //Optional
+  WiFi.begin(ssid, password);
+  Serial.println("\nConnecting");
+
+  while (WiFi.status() != WL_CONNECTED) {
+    digitalWrite(LED_BUILTIN, LOW); 
+    Serial.println(".");
+    delay(1000);
+  }
+  Serial.println("\nConnected to the WiFi network");
+  Serial.print("Local ESP32 IP: ");
+  Serial.println(WiFi.localIP());
+  config.api_key = API_KEY;
+  auth.user.email = USER_EMAIL;
+  auth.user.password = USER_PASSWORD;
+  config.database_url = DATABASE_URL;
+  Firebase.reconnectNetwork(true);
+  Firebase.begin(&config, &auth);
+}
+void maybomnuoc(int doam) {
+  
+  delay(1000);
+  String autowater = "";
+  String manualwater = "";
+  String point = "";
+  if (Firebase.RTDB.getString(&fbdo, "/autowater")) {
+    autowater = fbdo.stringData();
+    Serial.println("Autowater:");
+    Serial.println(autowater);
+  }
+  if (Firebase.RTDB.getString(&fbdo, "/manualwater")) {
+    manualwater = fbdo.stringData();
+  }
+  if (Firebase.RTDB.getString(&fbdo, "/nguongkichhoatmaybom")) {
+    point = fbdo.stringData();
+  }
+  const char* string1 = point.c_str();
+  int x = atoi(string1);
+  Serial.println("Nguong kich hoat may bom");
+  Serial.println(x);
+  if (autowater == "true") {
+    if (doam < x)
+      digitalWrite(maybom, HIGH);  // Bat tat may bom
+    else
+      digitalWrite(maybom, LOW);
+  }
+
+
+  if (autowater == "false") {
+    if (manualwater == "true") digitalWrite(maybom, HIGH);  // Bat tat may bom
+    if (manualwater == "false") digitalWrite(maybom, LOW);
+  }
+}
+void chedodieuhoa(float nhietdo) {
+  delay(1000);
+
+  String autofan = "";
+  String manual = "";
+  String point = ""; 
+  String point2 = ""; // ngưỡng kích hoạt
+  if (Firebase.RTDB.getString(&fbdo, "/fan/point")) { //point kich hoạt quạt điều hỏa giảm nhiệt 
+    point = fbdo.stringData();
+  }
+  const char* string1 = point.c_str();
+  int x = atoi(string1);
+
+  if (Firebase.RTDB.getString(&fbdo, "/fan/pointdensuoi")) { /// tăng nhiệt bằng đèn sưởi
+    point2 = fbdo.stringData();
+  }
+  const char* string2 = point2.c_str();
+  int nguongdensuoi = atoi(string2);
+
+  if (Firebase.RTDB.getString(&fbdo, "/fan/auto")) {
+    autofan = fbdo.stringData();
+    Serial.println("Nhiet do");
+    Serial.println(nhietdo);
+    Serial.println("Tu dong dieu hoa:");
+    Serial.println(autofan);
+    Serial.println(x);
+    Serial.println(nguongdensuoi);
+  }else {
+      Serial.println("FAILED");
+      Serial.println("REASON: " + fbdo.errorReason());
+      
+      ESP.restart(); // restart lại để kết nối firebase
+    }
+  if (Firebase.RTDB.getString(&fbdo, "/fan/manual")) {
+    manual = fbdo.stringData();
+  }else {
+      Serial.println("FAILED");
+      Serial.println("REASON: " + fbdo.errorReason());
+      
+      ESP.restart(); // restart lại để kết nối firebase
+    }
+
+  if (autofan == "true") {
+    if (nhietdo > x){
+      digitalWrite(dieuhoa, HIGH);
+      Serial.println("Mo dieu hoa");
+    }
+    else{
+      digitalWrite(dieuhoa, LOW);
+       Serial.println("Tat dieu hoa");
+    }
+  }
+  if (autofan == "false") {
+    if (manual == "true") digitalWrite(dieuhoa, HIGH);  // Bat tat may bom
+    if (manual == "false") digitalWrite(dieuhoa, LOW);
+  }
+  if(autofan=="true"){
+    if(nhietdo < nguongdensuoi) {//Bật điều hòa khi nhiệt độ dưới ngưỡng 
+     digitalWrite(densuoi,HIGH);
+      Serial.println("Mo den suoi");
+    }
+    else {
+     digitalWrite(densuoi,LOW);
+      Serial.println("Tat den suoi");
+    }
+    
+  }
+  if (autofan == "false") {
+    if (manual == "true") digitalWrite(densuoi, HIGH);  // Bat tat may bom
+    if (manual == "false") digitalWrite(densuoi, LOW);
+  }
+  
+}
+
+void loop() {
+  if (WiFi.status() == WL_CONNECTED) {
+    digitalWrite(LED_BUILTIN, HIGH); 
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    digitalWrite(LED_BUILTIN, LOW); 
+
+  }
+  float humidity = dht.readHumidity();
+  float nhietdo = dht.readTemperature();
+  temp = analogRead(cbdoam);
+  doam = (100 - ((temp / 4095.00) * 100));
+  maybomnuoc(doam);
+  chedodieuhoa(nhietdo);
+
+  //Upload data to firebase
+  if (Firebase.ready() && (millis() - sendDataPrevMillis > 5000 || sendDataPrevMillis == 0)) {
+    sendDataPrevMillis = millis();
+    if (Firebase.RTDB.setInt(&fbdo, "/doamdat/", doam) && Firebase.RTDB.setInt(&fbdo, "/nhietdo/", nhietdo)) {
+      Serial.println("Up data to Firebase Success");
+    } else {
+      Serial.println("FAILED");
+      Serial.println("REASON: " + fbdo.errorReason());
+      
+      ESP.restart(); // restart lại để kết nối firebase
+    }
+  }
+}
